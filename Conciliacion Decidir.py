@@ -9,8 +9,8 @@ uploaded_decidir = st.file_uploader("Sube el reporte de Decidir (.xlsx)", type="
 uploaded_aper    = st.file_uploader("Sube el reporte de Aper (hoja ICBC) (.xlsx)", type="xlsx")
 
 if uploaded_decidir and uploaded_aper:
-    # 1) Leer y filtrar sólo “Acreditada”
-    df_dec = pd.read_excel(uploaded_decidir)
+    # 1) Leer y filtrar sólo “Acreditada” desde Decidir
+    df_dec = pd.read_excel(uploaded_decidir, engine='openpyxl')
     df_dec.columns = df_dec.columns.str.strip().str.lower()
     df_dec['estado'] = df_dec['estado'].astype(str).str.lower()
     df_dec = df_dec[df_dec['estado'] == 'acreditada']
@@ -23,7 +23,7 @@ if uploaded_decidir and uploaded_aper:
              .str.extract(r'(\d+)', expand=False)
     )
 
-    # Columnas de fecha y monto limpio
+    # Columnas de fecha y conversión de monto
     fecha_cols_dec = [c for c in df_dec.columns if 'fecha' in c]
     df_dec['monto_decidir'] = (
         df_dec['monto'].astype(str)
@@ -43,7 +43,7 @@ if uploaded_decidir and uploaded_aper:
     )
 
     # 2) Leer y preparar Aper
-    df_ape = pd.read_excel(uploaded_aper, sheet_name="ICBC")
+    df_ape = pd.read_excel(uploaded_aper, sheet_name="ICBC", engine='openpyxl')
     df_ape.columns = df_ape.columns.str.strip().str.lower()
     carrito_col = next(c for c in df_ape.columns if 'carrito' in c)
     df_ape['carrito'] = (
@@ -80,7 +80,6 @@ if uploaded_decidir and uploaded_aper:
     st.markdown(f"<h2>Total Decidir: {total_dec:,.2f}</h2>", unsafe_allow_html=True)
     st.markdown(f"<h2>Total Aper:    {total_ape:,.2f}</h2>", unsafe_allow_html=True)
 
-    # Mostrar la diferencia SIN signo, usando su valor absoluto
     if diff_total == 0:
         resultado = "✅ Los montos coinciden"
         color = "green"
@@ -171,6 +170,7 @@ if uploaded_decidir and uploaded_aper:
 
 else:
     st.info("Por favor, sube ambos archivos para iniciar la conciliación.")
+
 
 
 
