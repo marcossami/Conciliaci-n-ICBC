@@ -11,31 +11,6 @@ st.set_page_config(page_title="Conciliación Multicanal", layout="wide")
 st.title("Conciliación Multicanal")
 
 # =========================
-# ESTADO DE LA SESIÓN Y MENÚ INICIAL
-# =========================
-if 'canal_seleccionado' not in st.session_state:
-    st.session_state['canal_seleccionado'] = "(seleccionar)"
-
-# Este es el único widget que se muestra al inicio
-canal_elegido = st.selectbox(
-    "Elegí el canal a conciliar",
-    ["(seleccionar)", "ICBC Mall", "Carrefour"],
-    index=0,  # Asegura que "(seleccionar)" sea siempre la opción por defecto
-    key='canal_selector'
-)
-
-# Actualizar el estado de la sesión si el usuario cambia el valor
-if canal_elegido != st.session_state['canal_seleccionado']:
-    st.session_state['canal_seleccionado'] = canal_elegido
-    # Forzar un rerun para que la página se actualice y muestre la nueva interfaz
-    st.experimental_rerun()
-
-# Si no hay selección, detenemos la ejecución aquí y solo se muestra el selectbox
-if st.session_state['canal_seleccionado'] == "(seleccionar)":
-    st.info("Elegí un canal para iniciar la conciliación.")
-    st.stop()
-
-# =========================
 # FUNCIONES AUXILIARES (HELPERS)
 # =========================
 
@@ -245,12 +220,22 @@ def run_carrefour():
         st.info("Por favor, subí ambos archivos para iniciar la conciliación.")
 
 # =========================
-# ROUTER
+# LÓGICA PRINCIPAL
 # =========================
-if st.session_state['canal_seleccionado'] == "ICBC Mall":
+canal_elegido = st.selectbox(
+    "Elegí el canal a conciliar",
+    ["(seleccionar)", "ICBC Mall", "Carrefour"],
+    index=0
+)
+
+# En base al valor del selectbox, decidimos qué mostrar
+if canal_elegido == "ICBC Mall":
     run_icbc()
-elif st.session_state['canal_seleccionado'] == "Carrefour":
+elif canal_elegido == "Carrefour":
     run_carrefour()
+else:
+    st.warning("Por favor, seleccioná un canal para continuar.")
+
 
 
 
