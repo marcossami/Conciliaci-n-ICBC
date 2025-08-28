@@ -77,8 +77,11 @@ def get_excel_writer(dataframes: dict, output_file: io.BytesIO):
     return output_file
 
 # =========================
-# ESTADO DE LA SESIÓN Y DESPLEGABLE INICIAL
+# DESPLEGABLE INICIAL
 # =========================
+
+# Esta variable del estado de la sesión asegura que el valor del selectbox
+# se mantenga entre recargas de la app.
 if 'canal_seleccionado' not in st.session_state:
     st.session_state['canal_seleccionado'] = "(seleccionar)"
 
@@ -239,6 +242,7 @@ if st.session_state['canal_seleccionado'] == "Carrefour":
         )
     else:
         st.info("Por favor, subí ambos archivos para iniciar la conciliación.")
+
 
 
 
