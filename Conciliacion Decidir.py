@@ -10,7 +10,7 @@ st.set_page_config(page_title="Conciliación General", layout="wide")
 st.title("Conciliación General")
 
 # =========================
-# PASO 1: Selector de marketplace (único visible al inicio)
+# PASO 1: Selector de marketplace (ÚNICO visible al inicio)
 # =========================
 CANAL = st.radio(
     "¿Qué marketplace querés conciliar?",
@@ -19,7 +19,7 @@ CANAL = st.radio(
     horizontal=True
 )
 
-# Si no se eligió aún, no mostrar NADA más
+# Si todavía no se eligió canal, no mostrar NADA más
 if CANAL == "(seleccionar)":
     st.stop()
 
@@ -44,7 +44,7 @@ def normalize_id(series: pd.Series) -> pd.Series:
     )
 
 # =========================
-# ICBC MALL — (tu lógica intacta)
+# ICBC MALL — (tu lógica original intacta)
 # =========================
 def run_icbc():
     st.header("ICBC Mall — Decidir vs Aper")
@@ -115,7 +115,7 @@ def run_icbc():
             .reset_index()
         )
 
-        # 3) Totales y diferencia global
+        # 3) Mostrar totales y diferencia global
         total_dec = dec_group['monto_decidir'].sum()
         total_ape = ape_group['costoproducto'].sum()
         diff_total = total_dec - total_ape
@@ -202,7 +202,7 @@ def run_icbc():
         st.info("Subí ambos archivos para iniciar la conciliación.")
 
 # =========================
-# CARREFOUR — Marketplace
+# CARREFOUR — Marketplace (CTC usa SIEMPRE columna T)
 # =========================
 def run_carrefour():
     st.header("Carrefour Marketplace — Reporte Carrefour vs Reporte CTC")
@@ -220,7 +220,7 @@ def run_carrefour():
         df_car.columns = df_car.columns.str.strip()
         df_ctc.columns = df_ctc.columns.str.strip()
 
-        # Vista previa (opcional, útil para validar)
+        # Vista previa (opcional para validar)
         p1, p2 = st.columns(2)
         with p1:
             st.caption("Reporte Carrefour (primeras filas)")
@@ -234,7 +234,7 @@ def run_carrefour():
         cols_car = list(df_car.columns)
         cols_ctc = list(df_ctc.columns)
 
-        # IDs para join (dejamos seleccionable hasta que nos pases definitivos)
+        # IDs para join (dejamos seleccionable hasta confirmar definitivos)
         id_car = st.selectbox("Columna ID en **Carrefour** para matchear", cols_car, key="id_car")
         id_ctc = st.selectbox("Columna ID en **CTC** para matchear", cols_ctc, key="id_ctc")
 
@@ -270,7 +270,7 @@ def run_carrefour():
         else:
             df_ctc["_fecha"] = pd.NaT
 
-        # Agrupar por ID (suma montos; fecha mínima por ID)
+        # Agrupar por ID
         car_group = df_car.groupby("_id_norm", dropna=True).agg({
             "_monto": "sum",
             "_fecha": "min"
@@ -339,12 +339,14 @@ def run_carrefour():
         st.info("Subí ambos archivos para iniciar la conciliación.")
 
 # =========================
-# ROUTER: mostrar solo el bloque elegido
+# ROUTER: muestra sólo el bloque elegido
 # =========================
 if CANAL == "ICBC Mall":
     run_icbc()
 elif CANAL == "Carrefour":
     run_carrefour()
+
+
 
 
 
