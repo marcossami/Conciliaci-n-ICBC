@@ -5,9 +5,39 @@ import io
 import re
 
 # =========================
-# CONFIG INICIAL Y TITULO
+# CONFIG INICIAL Y TÍTULO
 # =========================
 st.set_page_config(page_title="Conciliación Multicanal", layout="wide")
+
+# =========================
+# MENÚ ÚNICO AL INICIO
+# =========================
+if 'canal_seleccionado' not in st.session_state:
+    st.session_state['canal_seleccionado'] = "(seleccionar)"
+
+# Este es el único widget que se muestra al inicio
+canal_elegido = st.selectbox(
+    "Elegí el canal a conciliar",
+    ["(seleccionar)", "ICBC Mall", "Carrefour"],
+    index=0,  # Asegura que "(seleccionar)" sea siempre la opción por defecto
+    key='canal_selector'
+)
+
+# Actualizar el estado de la sesión si el usuario cambia el valor
+if canal_elegido != st.session_state['canal_seleccionado']:
+    st.session_state['canal_seleccionado'] = canal_elegido
+    # Forzar un rerun para que la página se actualice y muestre la nueva interfaz
+    st.experimental_rerun()
+
+# Si no hay selección, detenemos la ejecución aquí y solo se muestra el selectbox
+if st.session_state['canal_seleccionado'] == "(seleccionar)":
+    st.info("Elegí un canal para iniciar la conciliación.")
+    st.stop()
+
+# =========================
+# A PARTIR DE AQUÍ SOLO SE MUESTRA SI HAY UN CANAL SELECCIONADO
+# =========================
+
 st.title("Conciliación Multicanal")
 
 # =========================
@@ -220,21 +250,14 @@ def run_carrefour():
         st.info("Por favor, subí ambos archivos para iniciar la conciliación.")
 
 # =========================
-# LÓGICA PRINCIPAL
+# ROUTER BASADO EN ESTADO
 # =========================
-canal_elegido = st.selectbox(
-    "Elegí el canal a conciliar",
-    ["(seleccionar)", "ICBC Mall", "Carrefour"],
-    index=0
-)
-
-# En base al valor del selectbox, decidimos qué mostrar
-if canal_elegido == "ICBC Mall":
+if st.session_state['canal_seleccionado'] == "ICBC Mall":
     run_icbc()
-elif canal_elegido == "Carrefour":
+elif st.session_state['canal_seleccionado'] == "Carrefour":
     run_carrefour()
-else:
-    st.warning("Por favor, seleccioná un canal para continuar.")
+
+
 
 
 
