@@ -10,37 +10,6 @@ import re
 st.set_page_config(page_title="Conciliación Multicanal", layout="wide")
 
 # =========================
-# MENÚ ÚNICO AL INICIO
-# =========================
-if 'canal_seleccionado' not in st.session_state:
-    st.session_state['canal_seleccionado'] = "(seleccionar)"
-
-# Este es el único widget que se muestra al inicio
-canal_elegido = st.selectbox(
-    "Elegí el canal a conciliar",
-    ["(seleccionar)", "ICBC Mall", "Carrefour"],
-    index=0,  # Asegura que "(seleccionar)" sea siempre la opción por defecto
-    key='canal_selector'
-)
-
-# Actualizar el estado de la sesión si el usuario cambia el valor
-if canal_elegido != st.session_state['canal_seleccionado']:
-    st.session_state['canal_seleccionado'] = canal_elegido
-    # Forzar un rerun para que la página se actualice y muestre la nueva interfaz
-    st.experimental_rerun()
-
-# Si no hay selección, detenemos la ejecución aquí y solo se muestra el selectbox
-if st.session_state['canal_seleccionado'] == "(seleccionar)":
-    st.info("Elegí un canal para iniciar la conciliación.")
-    st.stop()
-
-# =========================
-# A PARTIR DE AQUÍ SOLO SE MUESTRA SI HAY UN CANAL SELECCIONADO
-# =========================
-
-st.title("Conciliación Multicanal")
-
-# =========================
 # FUNCIONES AUXILIARES (HELPERS)
 # =========================
 
@@ -107,9 +76,19 @@ def get_excel_writer(dataframes: dict, output_file: io.BytesIO):
     return output_file
 
 # =========================
-# LÓGICA DE ICBC MALL
+# LÓGICA PRINCIPAL DE LA APLICACIÓN
 # =========================
-def run_icbc():
+
+st.title("Conciliación Multicanal")
+
+canal_elegido = st.selectbox(
+    "Elegí el canal a conciliar",
+    ["(seleccionar)", "ICBC Mall", "Carrefour"],
+    index=0
+)
+
+# La lógica solo se ejecuta si se elige un canal
+if canal_elegido == "ICBC Mall":
     st.header("ICBC Mall — Decidir vs Aper")
 
     uploaded_decidir = st.file_uploader("Subí el reporte de Decidir (.xlsx)", type="xlsx", key="decidir_icbc")
@@ -183,10 +162,7 @@ def run_icbc():
     else:
         st.info("Por favor, subí ambos archivos para iniciar la conciliación.")
 
-# =========================
-# LÓGICA DE CARREFOUR
-# =========================
-def run_carrefour():
+elif canal_elegido == "Carrefour":
     st.header("Carrefour Marketplace — Reporte Carrefour vs Reporte CTC")
 
     c1, c2 = st.columns(2)
@@ -249,13 +225,6 @@ def run_carrefour():
     else:
         st.info("Por favor, subí ambos archivos para iniciar la conciliación.")
 
-# =========================
-# ROUTER BASADO EN ESTADO
-# =========================
-if st.session_state['canal_seleccionado'] == "ICBC Mall":
-    run_icbc()
-elif st.session_state['canal_seleccionado'] == "Carrefour":
-    run_carrefour()
 
 
 
