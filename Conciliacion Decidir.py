@@ -11,6 +11,31 @@ st.set_page_config(page_title="Conciliación Multicanal", layout="wide")
 st.title("Conciliación Multicanal")
 
 # =========================
+# ESTADO DE LA SESIÓN Y MENÚ INICIAL
+# =========================
+if 'canal_seleccionado' not in st.session_state:
+    st.session_state['canal_seleccionado'] = "(seleccionar)"
+
+# Este es el único widget que se muestra al inicio
+canal_elegido = st.selectbox(
+    "Elegí el canal a conciliar",
+    ["(seleccionar)", "ICBC Mall", "Carrefour"],
+    index=0,  # Asegura que "(seleccionar)" sea siempre la opción por defecto
+    key='canal_selector'
+)
+
+# Actualizar el estado de la sesión si el usuario cambia el valor
+if canal_elegido != st.session_state['canal_seleccionado']:
+    st.session_state['canal_seleccionado'] = canal_elegido
+    # Forzar un rerun para que la página se actualice y muestre la nueva interfaz
+    st.experimental_rerun()
+
+# Si no hay selección, detenemos la ejecución aquí y solo se muestra el selectbox
+if st.session_state['canal_seleccionado'] == "(seleccionar)":
+    st.info("Elegí un canal para iniciar la conciliación.")
+    st.stop()
+
+# =========================
 # FUNCIONES AUXILIARES (HELPERS)
 # =========================
 
@@ -77,33 +102,9 @@ def get_excel_writer(dataframes: dict, output_file: io.BytesIO):
     return output_file
 
 # =========================
-# DESPLEGABLE INICIAL
-# =========================
-
-# Esta variable del estado de la sesión asegura que el valor del selectbox
-# se mantenga entre recargas de la app.
-if 'canal_seleccionado' not in st.session_state:
-    st.session_state['canal_seleccionado'] = "(seleccionar)"
-
-canal = st.selectbox(
-    "Elegí el canal a conciliar",
-    ["(seleccionar)", "ICBC Mall", "Carrefour"],
-    index=["(seleccionar)", "ICBC Mall", "Carrefour"].index(st.session_state['canal_seleccionado']),
-    key='selector_canal'
-)
-
-# Sincronizar el valor del selectbox con el estado de la sesión
-st.session_state['canal_seleccionado'] = canal
-
-# Si no hay selección, NO mostrar nada más.
-if st.session_state['canal_seleccionado'] == "(seleccionar)":
-    st.info("Elegí un canal para iniciar la conciliación.")
-    st.stop()
-
-# =========================
 # LÓGICA DE ICBC MALL
 # =========================
-if st.session_state['canal_seleccionado'] == "ICBC Mall":
+def run_icbc():
     st.header("ICBC Mall — Decidir vs Aper")
 
     uploaded_decidir = st.file_uploader("Subí el reporte de Decidir (.xlsx)", type="xlsx", key="decidir_icbc")
@@ -180,7 +181,7 @@ if st.session_state['canal_seleccionado'] == "ICBC Mall":
 # =========================
 # LÓGICA DE CARREFOUR
 # =========================
-if st.session_state['canal_seleccionado'] == "Carrefour":
+def run_carrefour():
     st.header("Carrefour Marketplace — Reporte Carrefour vs Reporte CTC")
 
     c1, c2 = st.columns(2)
@@ -242,6 +243,15 @@ if st.session_state['canal_seleccionado'] == "Carrefour":
         )
     else:
         st.info("Por favor, subí ambos archivos para iniciar la conciliación.")
+
+# =========================
+# ROUTER
+# =========================
+if st.session_state['canal_seleccionado'] == "ICBC Mall":
+    run_icbc()
+elif st.session_state['canal_seleccionado'] == "Carrefour":
+    run_carrefour()
+
 
 
 
