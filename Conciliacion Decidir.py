@@ -2,206 +2,277 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-import re
 
 # =========================
 # CONFIG INICIAL
 # =========================
-st.set_page_config(page_title="Conciliación Multicanal", layout="wide")
+st.set_page_config(page_title="Conciliación General", layout="wide")
+st.title("Conciliación General")
 
-# ==================================
-# LÓGICA DE LA PÁGINA DE SELECCIÓN
-# ==================================
+# =========================
+# DESPLEGABLE INICIAL (único visible al inicio)
+# =========================
+OPTIONS = ["(seleccionar)", "ICBC Mall", "Carrefour"]
+canal = st.selectbox("¿Qué marketplace querés conciliar?", OPTIONS, index=0)
+if canal == "(seleccionar)":
+    st.stop()
 
-# Este es el ÚNICO widget que se muestra inicialmente
-canal_elegido = st.radio(
-    "Elegí el canal a conciliar",
-    ["(seleccionar)", "ICBC Mall", "Carrefour"],
-    index=0,
-    horizontal=True
-)
+# =========================
+# HELPERS
+# =========================
+def normalize_money(series: pd.Series) -> pd.Series:
+    return (
+        series.astype(str)
+              .str.replace(r'[^\d,.\-]', '', regex=True)
+              .str.replace(',', '.', regex=False)
+              .replace({'': np.nan})
+              .pipe(pd.to_numeric, errors='coerce')
+    )
 
-# A partir de aquí, la lógica SOLO se ejecuta si se ha seleccionado un canal
-if canal_elegido == "ICBC Mall":
-    st.title("Conciliación Multicanal")
+def ctc_id_norm(series: pd.Series) -> pd.Series:
+    # "CRR-1538786970403-01" -> "1538786970403"
+    s = series.astype(str)
+    out = s.str.extract(r'^[A-Za-z]+-(\d+)-', expand=False)
+    return out.fillna(s.str.extract(r'(\d{6,})', expand=False))
+
+def carrefour_id_norm(series: pd.Series) -> pd.Series:
+    # "CRF-1547297149746-01" -> "1547297149746"
+    s = series.astype(str)
+    out = s.str.extract(r'^[A-Za-z]+-(\d+)-', expand=False)
+    return out.fillna(s.str.extract(r'(\d{6,})', expand=False))
+
+def guess_amount_column(cols):
+    """Heurística suave para elegir columna de monto en NO CTC."""
+    keys = ["monto", "total", "importe", "precio", "pvp", "valor"]
+    for c in cols:
+        cl = str(c).strip().lower()
+        if any(k in cl for k in keys):
+            return c
+    return None
+
+# =========================
+# ICBC MALL — (tu lógica original intacta)
+# =========================
+def run_icbc():
     st.header("ICBC Mall — Decidir vs Aper")
-
     uploaded_decidir = st.file_uploader("Subí el reporte de Decidir (.xlsx)", type="xlsx", key="decidir_icbc")
     uploaded_aper    = st.file_uploader("Subí el reporte de Aper (hoja ICBC) (.xlsx)", type="xlsx", key="aper_icbc")
 
     if uploaded_decidir and uploaded_aper:
-        # 1) Read and prepare DataFrames
         df_dec = pd.read_excel(uploaded_decidir, engine='openpyxl')
         df_dec.columns = df_dec.columns.str.strip().str.lower()
-        
-        # Filter only 'acreditada' status
-        df_dec = df_dec[df_dec['estado'].astype(str).str.lower() == 'acreditada']
-        
-        # Normalize ID and Amount
-        id_col_dec = "idoper" # Asumiendo un nombre de columna fijo por simplicidad
-        monto_col_dec = "monto" # Asumiendo un nombre de columna fijo
-        if id_col_dec not in df_dec.columns:
-            st.warning("Columna 'idoper' no encontrada. Se buscará por palabra clave.")
-            id_col_dec = [col for col in df_dec.columns if 'idoper' in col.lower() or 'id' in col.lower()][0]
-        if monto_col_dec not in df_dec.columns:
-            st.warning("Columna 'monto' no encontrada. Se buscará por palabra clave.")
-            monto_col_dec = [col for col in df_dec.columns if 'monto' in col.lower() or 'importe' in col.lower()][0]
+        df_dec['estado'] = df_dec['estado'].astype(str).str.lower()
+        df_dec = df_dec[df_dec['estado'] == 'acreditada']
 
-        df_dec['idoper'] = df_dec[id_col_dec].astype(str).str.split('-', n=1).str[0].str.extract(r'(\d+)', expand=False)
-        df_dec['monto_decidir'] = df_dec[monto_col_dec].astype(str).str.replace(r'[^\d,.\-]', '', regex=True).str.replace(',', '.', regex=False).pipe(pd.to_numeric, errors='coerce')
+        first_col = df_dec.columns[0]
+        df_dec['idoper'] = (
+            df_dec[first_col].astype(str)
+                 .str.split('-', n=1).str[0]
+                 .str.extract(r'(\d+)', expand=False)
+        )
 
-        # Group Decidir
-        dec_group = df_dec.groupby('idoper', dropna=True)['monto_decidir'].sum().reset_index()
+        fecha_cols_dec = [c for c in df_dec.columns if 'fecha' in c]
+        df_dec['monto_decidir'] = (
+            df_dec['monto'].astype(str)
+                 .str.replace(r'[^\d,.-]', '', regex=True)
+                 .str.replace(',', '.', regex=False)
+                 .pipe(pd.to_numeric, errors='coerce')
+        )
+
+        agg_dec = {col: 'min' for col in fecha_cols_dec}
+        agg_dec['monto_decidir'] = 'sum'
+        dec_group = df_dec.groupby('idoper', dropna=True).agg(agg_dec).reset_index()
 
         df_ape = pd.read_excel(uploaded_aper, sheet_name="ICBC", engine='openpyxl')
         df_ape.columns = df_ape.columns.str.strip().str.lower()
-        
-        # Normalize ID and Amount
-        id_col_ape = "carrito" # Asumiendo un nombre de columna fijo
-        monto_col_ape = "costoproducto" # Asumiendo un nombre de columna fijo
-        if id_col_ape not in df_ape.columns:
-            st.warning("Columna 'carrito' no encontrada. Se buscará por palabra clave.")
-            id_col_ape = [col for col in df_ape.columns if 'carrito' in col.lower() or 'id' in col.lower()][0]
-        if monto_col_ape not in df_ape.columns:
-            st.warning("Columna 'costoproducto' no encontrada. Se buscará por palabra clave.")
-            monto_col_ape = [col for col in df_ape.columns if 'costo' in col.lower() or 'monto' in col.lower()][0]
+        carrito_col = next(c for c in df_ape.columns if 'carrito' in c)
+        df_ape['carrito'] = (
+            df_ape[carrito_col].astype(str)
+                  .str.split('-', n=1).str[0]
+                  .str.extract(r'(\d+)', expand=False)
+        )
 
-        df_ape['carrito'] = df_ape[id_col_ape].astype(str).str.split('-', n=1).str[0].str.extract(r'(\d+)', expand=False)
-        df_ape['costoproducto'] = df_ape[monto_col_ape].astype(str).str.replace(r'[^\d,.\-]', '', regex=True).str.replace(',', '.', regex=False).pipe(pd.to_numeric, errors='coerce')
+        fecha_cols_ape = [c for c in df_ape.columns if 'fecha' in c]
+        cost_col = next(c for c in df_ape.columns if 'costo' in c and 'producto' in c)
+        df_ape['costoproducto'] = (
+            df_ape[cost_col].astype(str)
+                  .str.replace(r'[^\d,.-]', '', regex=True)
+                  .str.replace(',', '.', regex=False)
+                  .pipe(pd.to_numeric, errors='coerce')
+        )
 
-        # Group Aper
-        ape_group = df_ape.groupby('carrito', dropna=True)['costoproducto'].sum().reset_index()
+        agg_ape = {col: 'min' for col in fecha_cols_ape}
+        agg_ape['costoproducto'] = 'sum'
+        ape_group = df_ape.groupby('carrito', dropna=True).agg(agg_ape).reset_index()
 
-        # 2) Display totals and global difference
-        total1 = dec_group['monto_decidir'].sum(skipna=True)
-        total2 = ape_group['costoproducto'].sum(skipna=True)
-        diff_total = total1 - total2
+        total_dec = dec_group['monto_decidir'].sum()
+        total_ape = ape_group['costoproducto'].sum()
+        diff_total = total_dec - total_ape
         diff_abs = abs(diff_total)
-        
+
         c1, c2, c3 = st.columns(3)
-        c1.metric(f"Total Decidir", f"{total1:,.2f}")
-        c2.metric(f"Total Aper", f"{total2:,.2f}")
+        c1.metric("Total Decidir", f"{total_dec:,.2f}")
+        c2.metric("Total Aper", f"{total_ape:,.2f}")
         c3.metric("Diferencia", f"{diff_abs:,.2f}", delta=f"{diff_total:,.2f}")
 
-        # 3) Reconciliation
+        set_dec = set(dec_group['idoper'])
+        set_ape = set(ape_group['carrito'])
+        falt_aper    = sorted(set_dec - set_ape)
+        falt_decider = sorted(set_ape - set_dec)
+        if not falt_aper and not falt_decider:
+            st.success("Todos los registros acreditados fueron encontrados correctamente.")
+        else:
+            if falt_aper:
+                st.error("IDoper que faltan en Aper: " + ", ".join(map(str, falt_aper)))
+            if falt_decider:
+                st.error("Carritos en Aper que no están en Decidir: " + ", ".join(map(str, falt_decider)))
+
         df_matched = pd.merge(dec_group, ape_group, left_on='idoper', right_on='carrito', how='inner', suffixes=('_dec','_ape'))
         df_matched['diferencia'] = df_matched['monto_decidir'] - df_matched['costoproducto']
 
+        final_cols = (['idoper', 'carrito'] + fecha_cols_dec + ['monto_decidir'] + fecha_cols_ape + ['costoproducto', 'diferencia'])
+        df_result = df_matched[final_cols]
+
+        def style_mismatch(row):
+            return ['background-color: red; font-weight: bold;' if row['diferencia'] != 0 else '' for _ in row]
         st.subheader("Registros Conciliados")
-        def style_mismatches(df: pd.DataFrame, column: str):
-            def style_row(row):
-                if row[column] != 0:
-                    return ['background-color: #ffcccc; font-weight: bold;'] * len(row)
-                else:
-                    return [''] * len(row)
-            return df.style.apply(style_row, axis=1)
-        st.dataframe(style_mismatches(df_matched, 'diferencia'), height=500, use_container_width=True)
+        st.dataframe(df_result.style.apply(style_mismatch, axis=1), height=500)
 
-        # 4) Display non-matches
-        st.subheader("Registros sin Match")
-        df_dec_sin_ape = dec_group[~dec_group['idoper'].isin(ape_group['carrito'])]
-        st.info(f"Decidir acreditadas sin Aper: {len(df_dec_sin_ape)} registros")
-        st.dataframe(df_dec_sin_ape, use_container_width=True)
+        st.subheader("Decidir acreditadas sin Aper")
+        st.dataframe(dec_group[~dec_group['idoper'].isin(ape_group['carrito'])], height=200)
 
-        df_ape_sin_dec = ape_group[~ape_group['carrito'].isin(dec_group['idoper'])]
-        st.info(f"Aper sin Decidir acreditadas: {len(df_ape_sin_dec)} registros")
-        st.dataframe(df_ape_sin_dec, use_container_width=True)
+        st.subheader("Aper sin Decidir acreditadas")
+        st.dataframe(ape_group[~ape_group['carrito'].isin(dec_group['idoper'])], height=200)
 
-        # 5) Download
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df_matched.to_excel(writer, sheet_name='Conciliados', index=False)
-            df_dec_sin_ape.to_excel(writer, sheet_name='Decidir_sin_Aper', index=False)
-            df_ape_sin_dec.to_excel(writer, sheet_name='Aper_sin_Decidir', index=False)
+            df_result.to_excel(writer, sheet_name='Conciliados', index=False)
+            dec_group[~dec_group['idoper'].isin(ape_group['carrito'])].to_excel(writer, sheet_name='Decidir_sin_Aper', index=False)
+            ape_group[~ape_group['carrito'].isin(dec_group['idoper'])].to_excel(writer, sheet_name='Aper_sin_Decidir', index=False)
         output.seek(0)
-        
-        st.download_button(
-            label="Descargar conciliación completa",
-            data=output,
-            file_name="conciliacion_ICBC.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        st.download_button("Descargar conciliación ICBC", output, "conciliacion_ICBC.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
-        st.info("Por favor, subí ambos archivos para iniciar la conciliación.")
+        st.info("Subí ambos archivos para iniciar la conciliación.")
 
-elif canal_elegido == "Carrefour":
-    st.title("Conciliación Multicanal")
-    st.header("Carrefour Marketplace — Reporte Carrefour vs Reporte CTC")
+# =========================
+# CARREFOUR — CTC vs NO CTC
+# =========================
+def run_carrefour():
+    st.header("Carrefour Marketplace — CTC vs NO CTC")
 
     c1, c2 = st.columns(2)
     with c1:
-        file_carrefour = st.file_uploader("Subí **Reporte Carrefour** (.xlsx)", type=["xlsx"], key="carrefour_rep")
+        file_no_ctc = st.file_uploader("Subí **Reporte Carrefour (NO CTC)** (.xlsx)", type=["xlsx"], key="carrefour_rep")
     with c2:
-        file_ctc = st.file_uploader("Subí **Reporte CTC** (.xlsx)", type=["xlsx"], key="ctc_rep")
+        file_ctc    = st.file_uploader("Subí **Reporte CTC** (.xlsx)", type=["xlsx"], key="ctc_rep")
 
-    if file_carrefour and file_ctc:
-        df_car = pd.read_excel(file_carrefour, engine="openpyxl")
+    if file_ctc and file_no_ctc:
+        # ---------- CTC ----------
         df_ctc = pd.read_excel(file_ctc, engine="openpyxl")
-        df_car.columns = df_car.columns.str.strip().str.lower()
-        df_ctc.columns = df_ctc.columns.str.strip().str.lower()
-
-        # Selection of columns
-        id_car = st.selectbox("Columna ID en **Carrefour** para matchear", list(df_car.columns))
-        id_ctc = st.selectbox("Columna ID en **CTC** para matchear", list(df_ctc.columns))
-        monto_car = st.selectbox("Columna **Monto** en Carrefour", list(df_car.columns))
-        
-        # Assuming 'T' (index 19) is the column for CTC
-        if df_ctc.shape[1] > 19:
-            m_ctc_col = df_ctc.columns[19]
-            st.success(f"Usando la columna T del CTC: **{m_ctc_col}**")
-        else:
-            st.warning("El archivo CTC no tiene la columna T (índice 19). Por favor, revisá el archivo.")
+        if df_ctc.shape[1] < 20:
+            st.error("El archivo CTC debe tener al menos 20 columnas (para usar la columna T como monto).")
             st.stop()
 
+        col_id_ctc = df_ctc.columns[0]    # Columna A: ID Venta
+        col_m_ctc  = df_ctc.columns[19]   # Columna T: monto
 
-        # Normalization and grouping
-        df_car["_id_norm"] = df_car[id_car].astype(str).str.split('-', n=1).str[0].str.extract(r'(\d+)', expand=False)
-        df_ctc["_id_norm"] = df_ctc[id_ctc].astype(str).str.split('-', n=1).str[0].str.extract(r'(\d+)', expand=False)
-        df_car["_monto"] = df_car[monto_car].astype(str).str.replace(r'[^\d,.\-]', '', regex=True).str.replace(',', '.', regex=False).pipe(pd.to_numeric, errors='coerce')
-        df_ctc["_monto"] = df_ctc[m_ctc_col].astype(str).str.replace(r'[^\d,.\-]', '', regex=True).str.replace(',', '.', regex=False).pipe(pd.to_numeric, errors='coerce')
+        df_ctc["_id_norm"] = ctc_id_norm(df_ctc[col_id_ctc])
+        df_ctc["_monto"]   = normalize_money(df_ctc[col_m_ctc])
 
-        car_group = df_car.groupby("_id_norm", dropna=True)["_monto"].sum().reset_index().rename(columns={"_monto": "monto_carrefour"})
-        ctc_group = df_ctc.groupby("_id_norm", dropna=True)["_monto"].sum().reset_index().rename(columns={"_monto": "monto_ctc"})
+        ctc_group = (df_ctc.groupby("_id_norm", dropna=True)["_monto"]
+                          .sum()
+                          .reset_index()
+                          .rename(columns={"_monto": "monto_ctc"}))
 
-        # Totals
-        total1 = car_group['monto_carrefour'].sum(skipna=True)
-        total2 = ctc_group['monto_ctc'].sum(skipna=True)
-        diff_total = total1 - total2
-        diff_abs = abs(diff_total)
-        
+        # ---------- NO CTC ----------
+        df_no = pd.read_excel(file_no_ctc, engine="openpyxl")
+        df_no.columns = df_no.columns.str.strip()
+
+        col_id_no = df_no.columns[1]  # Columna B: Numero de Orden
+        df_no["_id_norm"] = carrefour_id_norm(df_no[col_id_no])
+
+        # Detectar monto automáticamente o pedir selección
+        guessed = guess_amount_column(df_no.columns)
+        if guessed is None:
+            monto_no = st.selectbox("Elegí la columna de MONTO en NO CTC", list(df_no.columns), key="monto_no_ctc")
+        else:
+            monto_no = guessed
+            st.caption(f"Usando columna de monto detectada en NO CTC: **{monto_no}**")
+
+        df_no["_monto"] = normalize_money(df_no[monto_no])
+        no_group = (df_no.groupby("_id_norm", dropna=True)["_monto"]
+                         .sum()
+                         .reset_index()
+                         .rename(columns={"_monto": "monto_no_ctc"}))
+
+        # ---------- IDs presentes/ausentes ----------
+        ids_ctc = set(ctc_group["_id_norm"])
+        ids_no  = set(no_group["_id_norm"])
+        solo_ctc = sorted(ids_ctc - ids_no)
+        solo_no  = sorted(ids_no - ids_ctc)
+
+        st.subheader("IDs en CTC y no en NO CTC")
+        st.write(", ".join(solo_ctc) if solo_ctc else "— Ninguno —")
+
+        st.subheader("IDs en NO CTC y no en CTC")
+        st.write(", ".join(solo_no) if solo_no else "— Ninguno —")
+
+        # ---------- Totales ----------
+        total_ctc = ctc_group["monto_ctc"].sum(skipna=True)
+        total_no  = no_group["monto_no_ctc"].sum(skipna=True)
+        diff_total = total_no - total_ctc
+        diff_abs   = abs(diff_total)
+
+        if diff_total == 0:
+            resumen = "✅ Ambos tienen el mismo monto."
+        elif diff_total > 0:
+            resumen = f"❌ NO CTC es mayor por {diff_abs:,.2f}."
+        else:
+            resumen = f"❌ CTC es mayor por {diff_abs:,.2f}."
+
         c1, c2, c3 = st.columns(3)
-        c1.metric("Total Carrefour", f"{total1:,.2f}")
-        c2.metric("Total CTC", f"{total2:,.2f}")
-        c3.metric("Diferencia", f"{diff_abs:,.2f}", delta=f"{diff_total:,.2f}")
+        c1.metric("Total CTC (col T)", f"{total_ctc:,.2f}")
+        c2.metric("Total NO CTC", f"{total_no:,.2f}")
+        c3.metric("Diferencia abs.", f"{diff_abs:,.2f}", delta=f"{diff_total:,.2f}")
+        st.info(resumen)
 
-        # Merge and difference per record
-        m = pd.merge(car_group, ctc_group, on="_id_norm", how="outer")
-        m["diferencia"] = m["monto_carrefour"].fillna(0) - m["monto_ctc"].fillna(0)
+        # ---------- Conciliación por ID ----------
+        m = pd.merge(no_group, ctc_group, on="_id_norm", how="outer")
+        m["monto_no_ctc"] = m["monto_no_ctc"].fillna(0)
+        m["monto_ctc"]    = m["monto_ctc"].fillna(0)
+        m["diferencia"]   = m["monto_no_ctc"] - m["monto_ctc"]
 
-        st.subheader("Conciliados por ID")
-        def style_mismatches(df: pd.DataFrame, column: str):
-            def style_row(row):
-                if row[column] != 0:
-                    return ['background-color: #ffcccc; font-weight: bold;'] * len(row)
-                else:
-                    return [''] * len(row)
-            return df.style.apply(style_row, axis=1)
-        st.dataframe(style_mismatches(m, 'diferencia'), height=400, use_container_width=True)
-        
-        # Download
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            m.to_excel(writer, sheet_name='Conciliados', index=False)
-        output.seek(0)
-        
-        st.download_button(
-            label="Descargar conciliación Carrefour",
-            data=output,
-            file_name="conciliacion_Carrefour.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        def style_mismatch(row):
+            return ['background-color: red; font-weight: bold;' if row['diferencia'] != 0 else '' for _ in row]
+
+        st.subheader("Conciliación por ID (NO CTC - CTC)")
+        st.dataframe(m[["_id_norm", "monto_no_ctc", "monto_ctc", "diferencia"]]
+                     .sort_values("diferencia")
+                     .style.apply(style_mismatch, axis=1),
+                     height=480)
+
+        # ---------- Descarga ----------
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+            m.to_excel(writer, sheet_name="Conciliados", index=False)
+            pd.DataFrame({"id_solo_ctc": solo_ctc}).to_excel(writer, sheet_name="CTC_sin_NOCTC", index=False)
+            pd.DataFrame({"id_solo_no_ctc": solo_no}).to_excel(writer, sheet_name="NOCTC_sin_CTC", index=False)
+        out.seek(0)
+        st.download_button("Descargar conciliación Carrefour", out, "conciliacion_Carrefour.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
-        st.info("Por favor, subí ambos archivos para iniciar la conciliación.")
+        st.info("Subí ambos archivos para iniciar la conciliación.")
+
+# =========================
+# ROUTER
+# =========================
+if canal == "ICBC Mall":
+    run_icbc()
+elif canal == "Carrefour":
+    run_carrefour()
+
+
 
 
 
