@@ -36,17 +36,13 @@ def normalize_money(series: pd.Series, dash_as_zero: bool = False) -> pd.Series:
     )
 
 def ctc_id_norm(series: pd.Series) -> pd.Series:
-    """
-    CTC: 'CRR-1538786970403-01' -> '1538786970403'
-    """
+    """CTC: 'CRR-1538786970403-01' -> '1538786970403'"""
     s = series.astype(str)
     out = s.str.extract(r'^[A-Za-z]+-(\d+)-', expand=False)
     return out.fillna(s.str.extract(r'(\d{6,})', expand=False))
 
 def carrefour_id_norm(series: pd.Series) -> pd.Series:
-    """
-    NO CTC: 'CRF-1547297149746-01' -> '1547297149746'
-    """
+    """NO CTC: 'CRF-1547297149746-01' -> '1547297149746'"""
     s = series.astype(str)
     out = s.str.extract(r'^[A-Za-z]+-(\d+)-', expand=False)
     return out.fillna(s.str.extract(r'(\d{6,})', expand=False))
@@ -54,8 +50,7 @@ def carrefour_id_norm(series: pd.Series) -> pd.Series:
 def dedupe_columns(cols) -> list:
     """
     Hace únicos los nombres de columnas preservando orden.
-    'Col', 'Col' -> 'Col', 'Col_1'
-    Además recorta espacios y trata 'Unnamed:*' como 'unnamed'.
+    'Col', 'Col' -> 'Col', 'Col_1'. Normaliza 'Unnamed:*' a 'unnamed'.
     """
     seen = {}
     out = []
@@ -73,8 +68,8 @@ def dedupe_columns(cols) -> list:
 
 def find_no_ctc_amount_column(columns) -> str | None:
     """
-    Busca la columna 'PVP TOTAL C/IVA' en NO CTC ignorando saltos de línea y espacios.
-    Devuelve el nombre real de la columna si la encuentra, si no None.
+    Busca 'PVP TOTAL C/IVA' ignorando saltos de línea y espacios extra.
+    Acepta encabezados como 'PVP TOTAL\\nC/IVA'.
     """
     target = "pvp total c/iva"
     for c in columns:
@@ -99,7 +94,7 @@ def run_icbc():
         df_dec['estado'] = df_dec['estado'].astype(str).str.lower()
         df_dec = df_dec[df_dec['estado'] == 'acreditada']
 
-        # ID (solo dígitos antes del guion, según tu código original)
+        # ID (solo dígitos antes del guion)
         first_col = df_dec.columns[0]
         df_dec['idoper'] = (
             df_dec[first_col].astype(str)
@@ -188,7 +183,7 @@ def run_icbc():
 
         # Export
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
             df_result.to_excel(writer, sheet_name='Conciliados', index=False)
             dec_group[~dec_group['idoper'].isin(ape_group['carrito'])].to_excel(writer, sheet_name='Decidir_sin_Aper', index=False)
             ape_group[~ape_group['carrito'].isin(dec_group['idoper'])].to_excel(writer, sheet_name='Aper_sin_Decidir', index=False)
@@ -237,11 +232,11 @@ def run_carrefour():
             st.error("El archivo NO CTC debe tener al menos 2 columnas (para usar la columna B: Numero de Orden).")
             st.stop()
 
-        # Col B: Numero de Orden (fijo)
+        # Col B: Número de Orden (fijo) -> ID normalizado
         col_id_no = df_no.columns[1]
         df_no["_id_norm"] = carrefour_id_norm(df_no[col_id_no])
 
-        # Monto: buscar columna 'PVP TOTAL C/IVA' (con o sin saltos de línea)
+        # Monto NO CTC: buscar 'PVP TOTAL C/IVA' (con o sin saltos de línea)
         col_m_no = find_no_ctc_amount_column(df_no.columns)
         if col_m_no is None:
             st.error("No se encontró la columna de monto 'PVP TOTAL C/IVA' en el NO CTC.")
@@ -322,6 +317,8 @@ if canal == "ICBC Mall":
     run_icbc()
 elif canal == "Carrefour":
     run_carrefour()
+
+
 
 
 
