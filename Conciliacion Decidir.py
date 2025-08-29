@@ -12,7 +12,7 @@ st.title("Conciliación General")
 # =========================
 # DESPLEGABLE INICIAL
 # =========================
-OPTIONS = ["(seleccionar)", "ICBC Mall", "Carrefour"]
+OPTIONS = ["(seleccionar)", "ICBC Mall", "Carrefour MKP"]
 canal = st.selectbox("¿Qué marketplace querés conciliar?", OPTIONS, index=0)
 if canal == "(seleccionar)":
     st.stop()
@@ -71,9 +71,10 @@ def run_carrefour():
 
     c1, c2 = st.columns(2)
     with c1:
-        file_no_ctc = st.file_uploader("Subí **Reporte de Carrefour** (.xlsx)", type=["xlsx"], key="carrefour_rep")
+        file_no_ctc = st.file_uploader("Subí Reporte de Carrefour", type=["xlsx"], key="carrefour_rep")
     with c2:
-        file_ctc    = st.file_uploader("Subí **Reporte CTC** (.xlsx)", type=["xlsx"], key="ctc_rep")
+        file_ctc    = st.file_uploader("Subí Reporte CTC", type=["xlsx"], key="ctc_rep")
+    
 
     if file_ctc and file_no_ctc:
         # ---------- CTC ----------
@@ -152,6 +153,7 @@ if canal == "ICBC Mall":
     run_icbc()
 elif canal == "Carrefour":
     run_carrefour()
+
 
 
 
