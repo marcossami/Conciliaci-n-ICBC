@@ -67,11 +67,11 @@ def run_icbc():
 # CARREFOUR
 # =========================
 def run_carrefour():
-    st.header("Carrefour Marketplace — CTC vs NO CTC")
+    st.header("Carrefour Marketplace — CTC vs Carrefour")
 
     c1, c2 = st.columns(2)
     with c1:
-        file_no_ctc = st.file_uploader("Subí **Reporte Carrefour (NO CTC)** (.xlsx)", type=["xlsx"], key="carrefour_rep")
+        file_no_ctc = st.file_uploader("Subí **Reporte de Carrefour** (.xlsx)", type=["xlsx"], key="carrefour_rep")
     with c2:
         file_ctc    = st.file_uploader("Subí **Reporte CTC** (.xlsx)", type=["xlsx"], key="ctc_rep")
 
@@ -152,6 +152,7 @@ if canal == "ICBC Mall":
     run_icbc()
 elif canal == "Carrefour":
     run_carrefour()
+
 
 
 
