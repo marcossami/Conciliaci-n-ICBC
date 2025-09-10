@@ -13,7 +13,7 @@ st.set_page_config(page_title="Conciliador De Facturación Para Marketplaces Ext
 st.title("Conciliador De Facturación Para Marketplaces Externos")
 
 # =========================
-# DESPLEGABLE INICIAL
+# SELECTOR
 # =========================
 OPTIONS = ["(seleccionar)", "ICBC Mall", "Carrefour"]
 canal = st.selectbox("¿Qué marketplace querés conciliar?", OPTIONS, index=0)
@@ -22,7 +22,7 @@ if canal == "(seleccionar)":
     st.stop()
 
 # =========================
-# HELPERS
+# HELPERS COMUNES
 # =========================
 def normalize_money(series: pd.Series, dash_as_zero: bool = False) -> pd.Series:
     s = series.astype(str).str.strip()
@@ -65,7 +65,6 @@ def format_ars_ctc(value) -> str:
 
 def only_digits_between_hyphens(series: pd.Series) -> pd.Series:
     s = series.astype(str).fillna('').str.strip()
-    # normalize different hyphen chars
     s = s.str.replace(r'[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]', '-', regex=True)
     s = s.str.replace(r'[\u00A0\u2007\u202F]', ' ', regex=True)
     mid = s.str.extract(r'(?i)[A-Za-z]+-(\d+)-', expand=False)
@@ -77,6 +76,7 @@ def only_digits_between_hyphens(series: pd.Series) -> pd.Series:
 
 
 def only_digits_before_first_hyphen(series: pd.Series) -> pd.Series:
+    """Devuelve los dígitos anteriores al primer guion (o el primer bloque numérico largo)."""
     s = series.astype(str).fillna('').str.strip()
     s = s.str.replace(r'[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]', '-', regex=True)
     s = s.str.replace(r'[\u00A0\u2007\u202F]', ' ', regex=True)
@@ -166,114 +166,260 @@ def read_file_robust(file_uploader, header_row: int = 0, prefer_sheet: str | Non
 
 
 # =========================
-# ICBC MALL — Decidir vs Aper
+# FLOW ICBC (corregido: identificar columna 'carrito' adecuada)
 # =========================
 def run_icbc():
     st.header("ICBC Mall — Decidir vs Aper")
 
-    uploaded_decidir = st.file_uploader("Subí el reporte de Decidir (.xlsx)", type="xlsx", key="decidir_icbc")
-    uploaded_aper    = st.file_uploader("Subí el reporte de Aper (hoja ICBC) (.xlsx)", type="xlsx", key="aper_icbc")
+    tipo_conciliacion = st.radio("¿Qué tipo de conciliación querés hacer?", ["Transacciones", "Puntos"])
+
+    if tipo_conciliacion == "Puntos":
+        st.warning("🔧 La conciliación de puntos aún está en desarrollo.")
+        return
+
+    uploaded_decidir = st.file_uploader("Sube el reporte de Decidir (.xlsx)", type="xlsx", key="icbc_decidir")
+    uploaded_aper = st.file_uploader("Sube el reporte de Aper (hoja ICBC) (.xlsx)", type="xlsx", key="icbc_aper")
 
     if not (uploaded_decidir and uploaded_aper):
-        st.info("Subí ambos archivos para iniciar la conciliación.")
+        st.info("Por favor, sube ambos archivos para iniciar la conciliación.")
         return
 
     try:
-        df_dec = pd.read_excel(uploaded_decidir, engine='openpyxl')
-        df_dec.columns = dedupe_columns(df_dec.columns)
+        # 1) Leer y filtrar sólo “Acreditada”
+        df_dec = pd.read_excel(uploaded_decidir, engine="openpyxl")
+        df_dec.columns = [str(c).strip() for c in df_dec.columns]
 
         col_estado = get_col_by_keyword(df_dec, ["estado", "status"])
-        col_monto_decidir = get_col_by_keyword(df_dec, ["monto", "importe"])
-        col_id_dec = get_col_by_keyword(df_dec, ["idoperacion", "id", "orden"])
-
-        if not col_estado or not col_monto_decidir or not col_id_dec:
-            st.error("No se encontraron las columnas 'estado', 'monto' o 'ID' en el reporte de Decidir.")
+        if col_estado is None:
+            st.error("El reporte de Decidir no contiene la columna 'estado' esperada.")
             return
-
         df_dec[col_estado] = df_dec[col_estado].astype(str).str.lower()
         df_dec = df_dec[df_dec[col_estado] == 'acreditada']
-        df_dec['idoper'] = only_digits_between_hyphens(df_dec[col_id_dec])
-        df_dec['monto_decidir'] = normalize_money(df_dec[col_monto_decidir])
 
-        dec_group = df_dec.groupby('idoper', dropna=True)['monto_decidir'].sum().reset_index()
+        # detectar columna que contiene el id oper en Decidir (lo usamos igual que antes)
+        col_id_candidate = get_col_by_keyword(df_dec, ["id oper", "idoper", "id_oper", "id oper.", "id"])
+        if col_id_candidate is None:
+            first_col = df_dec.columns[0]
+            col_id_candidate = first_col
+
+        # Extraer idoper: TOMAR SÓLO LOS DÍGITOS HASTA EL PRIMER GUION
+        df_dec['idoper'] = only_digits_before_first_hyphen(df_dec[col_id_candidate])
+
+        # Columnas de fecha y monto limpio
+        fecha_cols_dec = [c for c in df_dec.columns if 'fecha' in c.lower()]
+        monto_col_dec = None
+        for c in df_dec.columns:
+            cl = c.lower()
+            if 'monto' in cl or 'importe' in cl:
+                monto_col_dec = c
+                break
+        if monto_col_dec is None:
+            st.error("No se encontró columna de monto/importe en el reporte de Decidir.")
+            return
+
+        df_dec['monto_decidir'] = (
+            df_dec[monto_col_dec].astype(str)
+                .str.replace(r'[^\d,.-]', '', regex=True)
+                .str.replace(',', '.', regex=False)
+                .pipe(pd.to_numeric, errors='coerce')
+        )
+
+        agg_dec = {col: 'min' for col in fecha_cols_dec}
+        agg_dec['monto_decidir'] = 'sum'
+        dec_group = (
+            df_dec
+            .groupby('idoper', dropna=True)
+            .agg(agg_dec)
+            .reset_index()
+        )
     except Exception as e:
-        st.error(f"Ocurrió un error al procesar el archivo de Decidir. Detalles: {e}")
+        st.error(f"Ocurrió un error procesando el reporte de Decidir: {e}")
         return
 
     try:
-        df_ape = pd.read_excel(uploaded_aper, sheet_name="ICBC", engine='openpyxl')
-        df_ape.columns = dedupe_columns(df_ape.columns)
+        # 2) Leer y preparar Aper (hoja ICBC)
+        df_ape = pd.read_excel(uploaded_aper, sheet_name="ICBC", engine="openpyxl")
+        df_ape.columns = [str(c).strip() for c in df_ape.columns]
 
-        carrito_col = get_col_by_keyword(df_ape, ["carrito", "id", "orden"])
-        cost_col = get_col_by_keyword(df_ape, ["costoproducto", "monto", "importe"])
+        # --- Nueva lógica: priorizar columna 'carrito'; si no existe, buscar columna tipo 'id oper' y tomar la columna a la derecha ---
+        carrito_col = None
+        # 1) buscar columna que contenga exactamente 'carrito' (normalizada) o la palabra
+        for c in df_ape.columns:
+            if _norm(c) == "carrito" or "carrito" in _norm(c):
+                carrito_col = c
+                break
 
-        if not carrito_col or not cost_col:
-            st.error("No se encontraron las columnas 'carrito' o 'costo producto' en el reporte de Aper.")
+        # 2) si no se encontró, buscar columna tipo 'id oper' / 'idoper' / 'numero de orden' y tomar la siguiente columna (derecha)
+        if carrito_col is None:
+            for idx, c in enumerate(df_ape.columns):
+                n = _norm(c)
+                if any(k in n for k in ['id oper', 'idoper', 'id_oper', 'id oper.', 'numero de orden', 'numero orden', 'nro cobro', 'nro. cobro', 'numero de cobro']):
+                    # si existe columna a la derecha, la usamos como carrito (como me pediste)
+                    if idx + 1 < len(df_ape.columns):
+                        carrito_col = df_ape.columns[idx + 1]
+                        break
+
+        # 3) fallback: buscar cualquier columna que contenga la palabra 'carrito' (si no capturada por 1)
+        if carrito_col is None:
+            for c in df_ape.columns:
+                if "carrito" in _norm(c):
+                    carrito_col = c
+                    break
+
+        # 4) último recurso: buscar columnas que parezcan ID (números largos) y usar esa columna
+        if carrito_col is None:
+            for c in df_ape.columns:
+                sample = df_ape[c].astype(str).dropna().head(10).astype(str).tolist()
+                # si en la muestra hay strings con guiones y números al inicio, lo asumimos
+                if any(re.match(r'^\d+\-', s) or re.search(r'\d{6,}', s) for s in sample):
+                    carrito_col = c
+                    break
+
+        if carrito_col is None:
+            st.error("No se encontró la columna 'CARRITO' en el reporte de Aper (hoja ICBC). Revisa el archivo.")
             return
 
-        df_ape['carrito'] = only_digits_between_hyphens(df_ape[carrito_col])
-        df_ape['costoproducto'] = normalize_money(df_ape[cost_col])
+        # Extraer carrito: tomar dígitos hasta el primer guion (como pediste)
+        df_ape['carrito'] = only_digits_before_first_hyphen(df_ape[carrito_col])
 
-        ape_group = df_ape.groupby('carrito', dropna=True)['costoproducto'].sum().reset_index()
+        fecha_cols_ape = [c for c in df_ape.columns if 'fecha' in c.lower()]
+
+        cost_col = None
+        for c in df_ape.columns:
+            cl = c.lower()
+            if 'costo' in cl and 'producto' in cl:
+                cost_col = c
+                break
+        if cost_col is None:
+            for c in df_ape.columns:
+                cl = c.lower()
+                if 'importe' in cl or 'monto' in cl:
+                    cost_col = c
+                    break
+        if cost_col is None:
+            st.error("No se encontró columna 'costo producto' ni 'importe' en el reporte de Aper.")
+            return
+
+        df_ape['costoproducto'] = (
+            df_ape[cost_col].astype(str)
+                .str.replace(r'[^\d,.-]', '', regex=True)
+                .str.replace(',', '.', regex=False)
+                .pipe(pd.to_numeric, errors='coerce')
+        )
+
+        agg_ape = {col: 'min' for col in fecha_cols_ape}
+        agg_ape['costoproducto'] = 'sum'
+        ape_group = (
+            df_ape
+            .groupby('carrito', dropna=True)
+            .agg(agg_ape)
+            .reset_index()
+        )
     except Exception as e:
-        st.error(f"Ocurrió un error al procesar el archivo de Aper. Detalles: {e}")
+        st.error(f"Ocurrió un error procesando el reporte de Aper: {e}")
         return
 
-    # Totales & diferencias
-    total_dec = dec_group['monto_decidir'].sum()
-    total_ape = ape_group['costoproducto'].sum()
+    # 3) Mostrar totales y diferencia global
+    try:
+        total_dec = dec_group['monto_decidir'].sum()
+        total_ape = ape_group['costoproducto'].sum()
+    except Exception as e:
+        st.error(f"Error calculando totales: {e}")
+        return
+
     diff_total = total_dec - total_ape
     diff_abs = abs(diff_total)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Total Decidir", format_ars_ctc(total_dec))
-    c2.metric("Total Aper", format_ars_ctc(total_ape))
-    c3.metric("Diferencia", format_ars_ctc(diff_abs), delta=format_ars_ctc(diff_total))
+    st.markdown(f"<h3>Total Decidir: {total_dec:,.2f}</h3>", unsafe_allow_html=True)
+    st.markdown(f"<h3>Total Aper:    {total_ape:,.2f}</h3>", unsafe_allow_html=True)
 
-    # Conciliación por ID
+    if diff_total == 0:
+        resultado = "✅ Los montos coinciden"
+        color = "green"
+    elif diff_total > 0:
+        resultado = f"❌ El monto de Decidir es mayor por {diff_abs:,.2f}"
+        color = "red"
+    else:
+        resultado = f"❌ El monto de Aper es mayor por {diff_abs:,.2f}"
+        color = "red"
+
+    st.markdown(
+        f"<h3 style='color:{color}'>Diferencia: {diff_abs:,.2f} — {resultado}</h3>",
+        unsafe_allow_html=True
+    )
+
+    # 4) Validar mutualidad de IDs
+    set_dec = set(dec_group['idoper'])
+    set_ape = set(ape_group['carrito'])
+    falt_aper = sorted(set_dec - set_ape)
+    falt_decider = sorted(set_ape - set_dec)
+    if not falt_aper and not falt_decider:
+        st.success("Todos los registros acreditados fueron encontrados correctamente.")
+    else:
+        if falt_aper:
+            st.error("IDoper acreditadas que faltan en Aper: " + ", ".join(map(str, falt_aper)))
+        if falt_decider:
+            st.error("Carritos en Aper que no están en acreditadas de Decidir: " + ", ".join(map(str, falt_decider)))
+
+    # 5) Conciliación y diferencia por registro (inner join)
     df_matched = pd.merge(
         dec_group, ape_group,
         left_on='idoper', right_on='carrito',
-        how='outer', suffixes=('_dec','_ape')
+        how='inner',
+        suffixes=('_dec', '_ape')
     )
-    df_matched['monto_decidir'] = df_matched['monto_decidir'].fillna(0)
-    df_matched['costoproducto'] = df_matched['costoproducto'].fillna(0)
     df_matched['diferencia'] = df_matched['monto_decidir'] - df_matched['costoproducto']
 
-    df_show = df_matched[['idoper', 'carrito', 'monto_decidir', 'costoproducto', 'diferencia']].copy()
-    df_show['monto_decidir_fmt'] = df_show['monto_decidir'].map(format_ars_ctc)
-    df_show['costoproducto_fmt'] = df_show['costoproducto'].map(format_ars_ctc)
-    df_show['diferencia_fmt']    = df_show['diferencia'].map(format_ars_ctc)
+    final_cols = ['idoper', 'carrito'] + fecha_cols_dec + ['monto_decidir'] + fecha_cols_ape + ['costoproducto', 'diferencia']
+    final_cols = [c for c in final_cols if c in df_matched.columns]
 
-    st.subheader("Conciliación por ID (Decidir - Aper)")
-    st.dataframe(
-        df_show[['idoper','carrito','monto_decidir_fmt','costoproducto_fmt','diferencia_fmt']]
-        .sort_values('diferencia')
-        .style.apply(style_mismatch, axis=1),
-        height=480
-    )
+    df_result = df_matched[final_cols]
 
-    # IDs faltantes
-    st.subheader("IDs sin match")
-    falt_aper    = sorted(set(df_matched[df_matched['carrito'].isna()]['idoper'].dropna()))
-    falt_decider = sorted(set(df_matched[df_matched['idoper'].isna()]['carrito'].dropna()))
-    st.write("• En Decidir y no en Aper:", ", ".join(map(str, falt_aper)) if falt_aper else "— Ninguno —")
-    st.write("• En Aper y no en Decidir:", ", ".join(map(str, falt_decider)) if falt_decider else "— Ninguno —")
+    def _style_mismatch_local(row):
+        return ['background-color: red; font-weight: bold;' if row.get('diferencia', 0) != 0 else '' for _ in row]
 
-    # Descarga
-    output = io.BytesIO()
-    with excel_writer(output) as writer:
-        df_matched.to_excel(writer, sheet_name="Conciliados", index=False)
-        pd.DataFrame({"id_solo_decidir": falt_aper}).to_excel(writer, sheet_name="Decidir_sin_Aper", index=False)
-        pd.DataFrame({"id_solo_aper": falt_decider}).to_excel(writer, sheet_name="Aper_sin_Decidir", index=False)
-    output.seek(0)
+    st.subheader("Registros Conciliados")
+    st.dataframe(df_result.style.apply(_style_mismatch_local, axis=1), height=500)
 
-    st.download_button("Descargar conciliación completa (ICBC)", output, "conciliacion_ICBC.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    # 6) Mostrar no-matches
+    st.subheader("Decidir acreditadas sin Aper")
+    df_dec_sin = dec_group[~dec_group['idoper'].isin(ape_group['carrito'])]
+    st.dataframe(df_dec_sin, height=200)
+
+    st.subheader("Aper sin Decidir acreditadas")
+    df_ape_sin = ape_group[~ape_group['carrito'].isin(dec_group['idoper'])]
+    st.dataframe(df_ape_sin, height=200)
+
+    # 7) Descargar Excel final
+    try:
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df_result.to_excel(writer, sheet_name='Conciliados', index=False)
+            df_dec_sin.to_excel(writer, sheet_name='Decidir_sin_Aper', index=False)
+            df_ape_sin.to_excel(writer, sheet_name='Aper_sin_Decidir', index=False)
+            wb = writer.book
+            yellow = wb.add_format({'bg_color': '#FFFF00'})
+            for sheet_name, df_un in [
+                ('Decidir_sin_Aper', df_dec_sin),
+                ('Aper_sin_Decidir', df_ape_sin)
+            ]:
+                ws = writer.sheets[sheet_name]
+                rows, cols = df_un.shape
+                if rows > 0 and cols > 0:
+                    ws.conditional_format(1, 0, rows, cols - 1, {'type': 'no_blanks', 'format': yellow})
+        output.seek(0)
+        st.download_button(
+            label="Descargar conciliación completa (ICBC)",
+            data=output,
+            file_name="conciliacion_ICBC.xlsx",
+            mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet"
+        )
+    except Exception as e:
+        st.error(f"Error al generar el Excel de descarga: {e}")
 
 
 # =========================
-# CARREFOUR — CTC vs CARREFOUR
+# FLOW CARREFOUR (SIN CAMBIOS)
 # =========================
 def run_carrefour():
     st.header("Carrefour Marketplace — CTC vs Carrefour")
@@ -325,7 +471,7 @@ def run_carrefour():
 
     # detectar columnas clave
     col_id_ctc = get_col_by_keyword(df_ctc, ["id venta", "numero de orden", "orden", "id", "order"])
-    col_m_ctc  = get_col_by_keyword(df_ctc, ["pvp total c/iva", "importe total", "monto", "importe"])
+    col_m_ctc = get_col_by_keyword(df_ctc, ["pvp total c/iva", "importe total", "monto", "importe"])
 
     # forzar uso de columna 'Order' EXACTA en el archivo Carrefour si existe (normalizada)
     forced_order_col = None
@@ -336,9 +482,9 @@ def run_carrefour():
     if forced_order_col is not None:
         col_id_car = forced_order_col
     else:
-        col_id_car  = get_col_by_keyword(df_carrefour, ["order", "numero de orden", "nro. cobro", "orden", "id", "numero orden"])
+        col_id_car = get_col_by_keyword(df_carrefour, ["order", "numero de orden", "nro. cobro", "orden", "id", "numero orden"])
 
-    col_m_car  = get_col_by_keyword(df_carrefour, ["importe total", "importe", "monto", "importe no an"])
+    col_m_car = get_col_by_keyword(df_carrefour, ["importe total", "importe", "monto", "importe no an"])
 
     if not col_id_ctc or not col_m_ctc:
         st.error("No se encontraron 'ID Venta' o 'PVP TOTAL C/IVA' en el reporte CTC. Revisa columnas y formato.")
@@ -352,8 +498,8 @@ def run_carrefour():
     try:
         df_ctc['_id_raw'] = df_ctc[col_id_ctc].astype(str)
         df_ctc['_id_norm'] = only_digits_between_hyphens(df_ctc['_id_raw'])
-        df_ctc['_monto']   = normalize_money(df_ctc[col_m_ctc])
-        ctc_group = df_ctc.groupby('_id_norm', dropna=True)['_monto'].sum().reset_index().rename(columns={'_monto':'monto_ctc'})
+        df_ctc['_monto'] = normalize_money(df_ctc[col_m_ctc])
+        ctc_group = df_ctc.groupby('_id_norm', dropna=True)['_monto'].sum().reset_index().rename(columns={'_monto': 'monto_ctc'})
     except Exception as e:
         st.error(f"Error procesando el archivo CTC. Detalle: {e}")
         return
@@ -369,7 +515,7 @@ def run_carrefour():
             df_carrefour.loc[missing_mask, '_id_norm'] = df_carrefour.loc[missing_mask, '_id_raw'].str.extract(r'(\d{6,})', expand=False)
 
         df_carrefour['_id_for_group'] = df_carrefour['_id_norm'].fillna('__NO_ID__')
-        grouped = df_carrefour.groupby('_id_for_group', dropna=False)['_monto'].sum().reset_index().rename(columns={'_id_for_group':'_id_norm', '_monto':'monto_carrefour'})
+        grouped = df_carrefour.groupby('_id_for_group', dropna=False)['_monto'].sum().reset_index().rename(columns={'_id_for_group': '_id_norm', '_monto': 'monto_carrefour'})
         grouped['_id_norm'] = grouped['_id_norm'].replace({'__NO_ID__': np.nan})
         carrefour_group = grouped[['_id_norm', 'monto_carrefour']]
     except Exception as e:
@@ -405,8 +551,12 @@ def run_carrefour():
     # Realizar merges: full y matched (inner)
     try:
         m_all = pd.merge(carrefour_group, ctc_group, on="_id_norm", how="outer")
-        m_all["monto_carrefour"] = m_all.get("monto_carrefour", 0).fillna(0)
-        m_all["monto_ctc"] = m_all.get("monto_ctc", 0).fillna(0)
+        m_all["monto_carrefour"] = m_all.get("monto_carrefour", 0)
+        if isinstance(m_all["monto_carrefour"], pd.Series):
+            m_all["monto_carrefour"] = m_all["monto_carrefour"].fillna(0)
+        m_all["monto_ctc"] = m_all.get("monto_ctc", 0)
+        if isinstance(m_all["monto_ctc"], pd.Series):
+            m_all["monto_ctc"] = m_all["monto_ctc"].fillna(0)
 
         m_matched = pd.merge(carrefour_group, ctc_group, on="_id_norm", how="inner")
         if "monto_carrefour" not in m_matched.columns:
@@ -430,7 +580,6 @@ def run_carrefour():
     diff_total_all = total_car_all - total_ctc_all
     diff_abs_all = abs(diff_total_all)
 
-    # Mostrar métricas: primero matched (principal), luego global (secundario)
     st.subheader("Comparación De Monto total (solo para ID en ambos)")
     c1, c2, c3 = st.columns(3)
     c1.metric("Total CTC (IDs en ambos)", format_ars_ctc(total_ctc_matched))
@@ -490,6 +639,7 @@ if canal == "ICBC Mall":
     run_icbc()
 elif canal == "Carrefour":
     run_carrefour()
+
 
 
 
